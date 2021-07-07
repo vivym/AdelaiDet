@@ -80,12 +80,24 @@ class FCOS(nn.Module):
             features, top_module, self.yield_proposal
         )
 
+        results = {}
+        if self.yield_proposal:
+            results["features"] = {
+                f: b for f, b in zip(self.in_features, bbox_towers)
+            }
+
+        # torch.save((logits_pred, reg_pred, ctrness_pred, locations), "features.pth")
         if self.training:
             results, losses = self.fcos_outputs.losses(
                 logits_pred, reg_pred, ctrness_pred,
                 locations, gt_instances, top_feats
             )
-            
+            """
+            print(losses)
+            import sys
+            sys.exit(-1)
+            """
+
             if self.yield_proposal:
                 with torch.no_grad():
                     results["proposals"] = self.fcos_outputs.predict_proposals(
@@ -94,10 +106,29 @@ class FCOS(nn.Module):
                     )
             return results, losses
         else:
+            # from typing import List
+            # from detectron2.structures import Instances
             results = self.fcos_outputs.predict_proposals(
                 logits_pred, reg_pred, ctrness_pred,
                 locations, images.image_sizes, top_feats
             )
+            # print(results)
+
+            instances_list = []
+            for res in results:
+                pred_boxes = res.pred_boxes.tensor
+                scores = res.scores
+                pred_classes = res.pred_classes
+                locations = res.locations
+
+                instances_list.append((
+                    pred_boxes, scores, pred_classes, locations
+                ))
+            """
+            torch.save(instances_list, "predict_proposals.pth")
+            import sys
+            sys.exit(-1)
+            """
 
             return results, {}
 
@@ -208,6 +239,7 @@ class FCOSHead(nn.Module):
         top_feats = []
         bbox_towers = []
         for l, feature in enumerate(x):
+            # print("input", l, feature.shape)
             feature = self.share_tower(feature)
             cls_tower = self.cls_tower(feature)
             bbox_tower = self.bbox_tower(feature)
@@ -223,4 +255,9 @@ class FCOSHead(nn.Module):
             bbox_reg.append(F.relu(reg))
             if top_module is not None:
                 top_feats.append(top_module(bbox_tower))
+
+        """
+        for a, b, c in zip(logits, bbox_reg, ctrness):
+            print("output", a.shape, b.shape, c.shape)
+        """
         return logits, bbox_reg, ctrness, top_feats, bbox_towers

@@ -119,9 +119,17 @@ class FCOSOutputs(nn.Module):
             loc_to_size_range.append(
                 loc_to_size_range_per_level[None].expand(num_loc_list[l], -1)
             )
+            # print(loc_to_size_range_per_level.shape)
 
         loc_to_size_range = torch.cat(loc_to_size_range, dim=0)
+        """
+        print("loc_to_size_range")
+        print(loc_to_size_range)
+        print(loc_to_size_range.shape)
+        """
         locations = torch.cat(locations, dim=0)
+        # print("locations")
+        # print(locations.shape)
 
         training_targets = self.compute_targets_for_locations(
             locations, gt_instances, loc_to_size_range, num_loc_list
@@ -146,6 +154,14 @@ class FCOSOutputs(nn.Module):
         reg_targets = training_targets["reg_targets"]
         for l in range(len(reg_targets)):
             reg_targets[l] = reg_targets[l] / float(self.strides[l])
+
+        """
+        print("training_targets: ------------------")
+        for k, v in training_targets.items():
+            print(k, ":")
+            for x in v:
+                print("\t", x.shape)
+        """
 
         return training_targets
 
@@ -194,6 +210,9 @@ class FCOSOutputs(nn.Module):
         bottom = center_gt[..., 3] - loc_ys[:, None]
         center_bbox = torch.stack((left, top, right, bottom), -1)
         inside_gt_bbox_mask = center_bbox.min(-1)[0] > 0
+        # print("center_bbox", left.shape, loc_xs[:, None].shape, center_gt[..., 0].shape)
+        # print("center_bbox", center_bbox.shape)
+        # print("inside_gt_bbox_mask", inside_gt_bbox_mask.shape)
         return inside_gt_bbox_mask
 
     def compute_targets_for_locations(self, locations, targets, size_ranges, num_loc_list):
@@ -207,6 +226,7 @@ class FCOSOutputs(nn.Module):
             targets_per_im = targets[im_i]
             bboxes = targets_per_im.gt_boxes.tensor
             labels_per_im = targets_per_im.gt_classes
+            # torch.save((bboxes, labels_per_im), f"gt_instances_{im_i}.pth")
 
             # no gt
             if bboxes.numel() == 0:
@@ -221,7 +241,13 @@ class FCOSOutputs(nn.Module):
             t = ys[:, None] - bboxes[:, 1][None]
             r = bboxes[:, 2][None] - xs[:, None]
             b = bboxes[:, 3][None] - ys[:, None]
+            # print("llllllllll", xs[:, None].shape, l.shape, bboxes[:, 0][None].shape)
             reg_targets_per_im = torch.stack([l, t, r, b], dim=2)
+            """
+            print("bboxes", bboxes.shape)
+            print("labels_per_im", labels_per_im.shape)
+            print("reg_targets_per_im", reg_targets_per_im.shape)
+            """
 
             if self.center_sample:
                 if targets_per_im.has("gt_bitmasks_full"):
@@ -234,6 +260,7 @@ class FCOSOutputs(nn.Module):
                 )
             else:
                 is_in_boxes = reg_targets_per_im.min(dim=2)[0] > 0
+            # print("is_in_boxes", is_in_boxes.shape)
 
             max_reg_targets_per_im = reg_targets_per_im.max(dim=2)[0]
             # limit the regression range for each location
@@ -256,6 +283,11 @@ class FCOSOutputs(nn.Module):
             labels_per_im = labels_per_im[locations_to_gt_inds]
             labels_per_im[locations_to_min_area == INF] = self.num_classes
 
+            """
+            print("labels_per_im", labels_per_im.shape)
+            print("reg_targets_per_im", reg_targets_per_im.shape)
+            print("target_inds_per_im", target_inds_per_im.shape)
+            """
             labels.append(labels_per_im)
             reg_targets.append(reg_targets_per_im)
             target_inds.append(target_inds_per_im)
@@ -275,6 +307,7 @@ class FCOSOutputs(nn.Module):
         """
 
         training_targets = self._get_ground_truth(locations, gt_instances)
+        # torch.save(training_targets, "training_targets.pth")
 
         # Collect all logits and regression predictions over feature maps
         # and images to arrive at the same shape as the labels and targets
@@ -337,11 +370,16 @@ class FCOSOutputs(nn.Module):
 
         num_pos_local = torch.ones_like(pos_inds).sum()
         num_pos_avg = max(reduce_mean(num_pos_local).item(), 1.0)
+        # print("num_pos_avg", num_pos_avg)
 
         # prepare one_hot
         class_target = torch.zeros_like(instances.logits_pred)
         class_target[pos_inds, labels[pos_inds]] = 1
+        # torch.save((pos_inds, labels), "pos_inds.pth")
 
+        # print("class_target", class_target.shape)
+        # print("loss_normalizer_cls", self.loss_normalizer_cls)
+        # torch.save((instances.logits_pred, class_target), "loss_class.pth")
         class_loss = sigmoid_focal_loss_jit(
             instances.logits_pred,
             class_target,
@@ -368,15 +406,18 @@ class FCOSOutputs(nn.Module):
         instances = instances[pos_inds]
         instances.pos_inds = pos_inds
 
+        # print("reg", instances.reg_pred.shape, instances.reg_targets.shape)
         ious, gious = compute_ious(instances.reg_pred, instances.reg_targets)
 
         if self.box_quality == "ctrness":
             ctrness_targets = compute_ctrness_targets(instances.reg_targets)
             instances.gt_ctrs = ctrness_targets
+            # torch.save(ctrness_targets, "gt_ctrs.pth")
             
             ctrness_targets_sum = ctrness_targets.sum()
             loss_denorm = max(reduce_mean(ctrness_targets_sum).item(), 1e-6)
             extras["loss_denorm"] = loss_denorm
+            # print("loss_denorm", loss_denorm)
 
             reg_loss = self.loc_loss_func(ious, gious, ctrness_targets) / loss_denorm
             losses["loss_fcos_loc"] = reg_loss
